@@ -259,7 +259,7 @@ function openCloudSettings(){
     <div class="sqlhint wide"><b>Optional cloud storage.</b> The Register Document form always works locally. Configure one or both cloud targets for shared storage. For Supabase, use only the public <b>anon</b> key with Row Level Security enabled. Never paste a service-role key into this HTML.</div>
     <label class="wide">Supabase Project URL<input id="c_supabaseUrl" placeholder="https://your-project.supabase.co" value="${esc(c.supabaseUrl||'')}"></label>
     <label class="wide">Supabase Anon/Public Key<input id="c_supabaseKey" type="password" placeholder="public anon key" value="${esc(c.supabaseAnonKey||'')}"></label>
-    <label class="wide">Google Apps Script Web App URL<input id="c_appsScript" placeholder="https://script.google.com/a/macros/deped.gov.ph/s/AKfycby_d5VeF_tngvRVwVI_p98XVpxKcEEd8VAWO4gurd8i7jvYETBGV3D4L3RXX95XRpIZQQ/exec" value="${esc(c.appsScriptUrl||'')}"></label>
+    <label class="wide">Google Apps Script Web App URL<input id="c_appsScript" placeholder="https://script.google.com/a/macros/deped.gov.ph/s/AKfycbzyesp3AGOJJuVIXSsfwnFZhX6iYwIRlqDNvKGdbsZXXPRXBtq-zsD9QQP4BmQNdx2tGw/exec" value="${esc(c.appsScriptUrl||'')}"></label>
     <div class="actions wide"><button type="button" class="secondary" onclick="closeModal('docModal')">Cancel</button><button class="primary">Save Connection</button></div>
   </form>`;
   document.getElementById('docModal').style.display='grid';
@@ -389,17 +389,61 @@ function v6sheetConfigured(){return !!v6url()}
 function v6api(payload){
   const url=v6url();
   if(!url) return Promise.reject(new Error('Google Apps Script Web App URL is not configured.'));
+  const action=String(payload&&payload.action||'').trim();
+  // Reads use JSONP. Writes use a normal cross-origin HTML form POST so the
+  // browser never performs a CORS fetch. The write is verified by re-reading
+  // the Google Sheet database after the POST.
+  if(action==='getDocumentDatabase'||action==='health') return v6jsonp(url,payload);
+  return v6postAndVerify(url,payload);
+}
+function v6jsonp(url,payload){
   return new Promise((resolve,reject)=>{
-    const cb='__knhsV6_'+Date.now()+'_'+Math.random().toString(36).slice(2);
+    const cb='__knhsDT_'+Date.now()+'_'+Math.random().toString(36).slice(2);
     const script=document.createElement('script');
-    const timer=setTimeout(()=>{cleanup();reject(new Error('Google Apps Script did not respond. Check that the Web App is deployed as EXECUTE AS ME and accessible to the intended users.'))},20000);
-    function cleanup(){clearTimeout(timer);try{delete window[cb]}catch(_){window[cb]=undefined}script.remove()}
-    window[cb]=(d)=>{cleanup();if(!d||d.ok===false)reject(new Error((d&&d.message)||'Google Sheets request failed.'));else resolve(d)};
-    script.onerror=()=>{cleanup();reject(new Error('Failed to contact Google Apps Script. This version uses JSONP to avoid browser CORS/fetch errors.'))};
+    let done=false;
+    const finish=(fn,val)=>{if(done)return;done=true;clearTimeout(timer);try{delete window[cb]}catch(_){window[cb]=undefined}script.remove();fn(val)};
+    const timer=setTimeout(()=>finish(reject,new Error('Google Apps Script did not respond. Open the Web App /exec URL directly in a new browser tab. If it shows an authorization/login page, redeploy the Web App with Execute as: Me and access allowed to the users of this app.'))),25000);
+    window[cb]=(d)=>{if(!d||d.ok===false)finish(reject,new Error((d&&d.message)||'Google Sheets request failed.'));else finish(resolve,d)};
+    script.onerror=()=>finish(reject,new Error('Google Apps Script Web App could not be loaded. Check that the saved URL is the deployed /exec URL (not /dev), the deployment is active, and access is allowed.'));
     script.src=url+(url.includes('?')?'&':'?')+'action='+encodeURIComponent(payload.action||'')+'&payload='+encodeURIComponent(JSON.stringify(payload))+'&callback='+encodeURIComponent(cb)+'&_='+Date.now();
     document.body.appendChild(script);
   });
 }
+function v6postAndVerify(url,payload){
+  return new Promise((resolve,reject)=>{
+    const iframe=document.createElement('iframe');
+    iframe.name='__knhsPost_'+Date.now()+'_'+Math.random().toString(36).slice(2);
+    iframe.style.display='none';
+    document.body.appendChild(iframe);
+    const form=document.createElement('form');
+    form.method='POST'; form.action=url; form.target=iframe.name; form.style.display='none';
+    const a=document.createElement('input'); a.name='action'; a.value=String(payload.action||'');
+    const b=document.createElement('input'); b.name='payload'; b.value=JSON.stringify(payload);
+    form.appendChild(a); form.appendChild(b); document.body.appendChild(form);
+    let settled=false;
+    const cleanup=()=>{try{form.remove();iframe.remove()}catch(_){} };
+    const fail=(msg)=>{if(settled)return;settled=true;cleanup();reject(new Error(msg));};
+    const timer=setTimeout(()=>fail('Google Apps Script write could not be verified. Check the /exec Web App deployment and Google Sheet permissions.')),30000);
+    iframe.onload=async()=>{
+      // The iframe response is intentionally not read (cross-origin). Instead,
+      // verify the write through the JSONP read endpoint.
+      if(settled)return;
+      await new Promise(r=>setTimeout(r,900));
+      try{
+        const r=await v6jsonp(url,{action:'getDocumentDatabase'});
+        const d=payload.document||{};
+        const found=(r.documents||[]).find(x=>Number(x.id)===Number(d.id)&&String(x.control_no||'').trim().toLowerCase()===String(d.control_no||'').trim().toLowerCase());
+        const existsByControl=(r.documents||[]).find(x=>String(x.control_no||'').trim().toLowerCase()===String(d.control_no||'').trim().toLowerCase());
+        if(payload.action==='createDocument' && existsByControl){clearTimeout(timer);settled=true;cleanup();resolve({ok:true,document_id:Number(existsByControl.id),source:'Google Sheets'});return}
+        if(payload.action==='updateDocument' && found){clearTimeout(timer);settled=true;cleanup();resolve({ok:true,document_id:Number(found.id),source:'Google Sheets'});return}
+        if(payload.action!=='createDocument'&&payload.action!=='updateDocument'){clearTimeout(timer);settled=true;cleanup();resolve({ok:true,source:'Google Sheets'});return}
+        fail('The request reached the Web App but the document was not found after saving. Check the Apps Script execution log and the DOCUMENTS sheet.');
+      }catch(e){fail('POST was sent, but Google Sheets could not be read back: '+(e.message||e));}
+    };
+    try{form.submit()}catch(e){fail('Could not send the Google Apps Script request: '+(e.message||e));}
+  });
+}
+
 function v6fromSheet(x){return {id:Number(x.id)||uid(),control:x.control_no||'',reference:x.reference_no||'',subject:x.subject||'',type:x.document_type||'',sender:x.sender||'',origin:x.originating_office||'',received:x.date_received||'',due:x.due_date||'',priority:x.priority||'Normal',status:x.status||'Received',office:x.current_office||'',custodian:x.current_custodian||'',remarks:x.remarks||'',created:x.created_at||new Date().toISOString(),updated:x.updated_at||new Date().toISOString(),movements:[],attachments:[]}}
 function v6mergeMovements(docs,moves){const map={}; docs.forEach(d=>map[d.id]=d); (moves||[]).forEach(m=>{const d=map[Number(m.document_id)]; if(d){(d.movements||(d.movements=[])).push({id:Number(m.id)||uid(),at:m.created_at||'',from:m.route_from||'',to:m.route_to||'',receivedBy:m.received_by||'',action:m.action||'',status:m.status||'',remarks:m.remarks||'',by:m.by||''})}}); return docs}
 async function loadSharedDocumentsV6(silent=false){
