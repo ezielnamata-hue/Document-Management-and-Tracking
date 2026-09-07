@@ -187,12 +187,12 @@ document.getElementById('loginPass').addEventListener('keydown',e=>{if(e.key==='
 */
 const CLOUD_CFG_KEY='KNHS_DocumentTrack_CLOUD_V3';
 function cloudCfg(){try{return JSON.parse(localStorage.getItem(CLOUD_CFG_KEY)||'{}')}catch(e){return {}}}
-function saveCloudCfg(c){localStorage.setItem(CLOUD_CFG_KEY,JSON.stringify(c||{}));}
-function cloudConfigured(){let c=cloudCfg();return !!(c.supabaseUrl&&c.supabaseAnonKey)||!!(c.appsScriptUrl);}
+function saveCloudCfg(c){localStorage.setItem(CLOUD_CFG_KEY,JSON.stringify(c||{})); if(c&&c.appsScriptUrl){v6savecfg({appsScriptUrl:c.appsScriptUrl});}}
+function cloudConfigured(){let c=cloudCfg();return !!(c.supabaseUrl&&c.supabaseAnonKey)||!!v6url();}
 function cloudStatusText(){
   let c=cloudCfg(), parts=[];
   if(c.supabaseUrl&&c.supabaseAnonKey) parts.push('Supabase connected');
-  if(c.appsScriptUrl) parts.push('Google Sheets connected');
+  if(v6url()) parts.push('Google Sheets connected');
   return parts.length?parts.join(' • '):'Local browser storage only';
 }
 async function supabaseRequest(path, method, body){
@@ -226,19 +226,17 @@ async function pushDocumentToSupabase(d, isNew){
   return result;
 }
 async function pushDocumentToSheets(d, isNew){
-  let c=cloudCfg(); if(!c.appsScriptUrl) return null;
-  let payload={action:isNew?'createDocument':'updateDocument',document:sqlDocument(d),movementCount:(d.movements||[]).length,actor:currentUser?.username||'admin'};
-  let res=await fetch(c.appsScriptUrl,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(payload)});
-  let text=await res.text(), data; try{data=JSON.parse(text)}catch(e){data={ok:false,message:text}};
-  if(!res.ok||data.ok===false)throw new Error(data.message||'Google Sheets sync failed.');
-  if(data.document_id&&!d.id)d.id=Number(data.document_id);
+  const url=v6url(); if(!url) return null;
+  const payload={action:isNew?'createDocument':'updateDocument',document:sqlDocument(d),movementCount:(d.movements||[]).length,actor:(currentUser&&currentUser.username)||'admin'};
+  const data=await v6postAndVerify(url,payload);
+  if(data&&data.document_id)d.id=Number(data.document_id);
   return data;
 }
 async function syncOneDocument(d,isNew){
   let results=[];
   let c=cloudCfg();
   if(c.supabaseUrl&&c.supabaseAnonKey){try{await pushDocumentToSupabase(d,isNew);results.push('Supabase')}catch(e){console.warn(e);results.push('Supabase failed: '+e.message)}}
-  if(c.appsScriptUrl){try{await pushDocumentToSheets(d,isNew);results.push('Google Sheets')}catch(e){console.warn(e);results.push('Google Sheets failed: '+e.message)}}
+  if(v6url()){try{await pushDocumentToSheets(d,isNew);results.push('Google Sheets')}catch(e){console.warn(e);results.push('Google Sheets failed: '+e.message)}}
   return results;
 }
 function renderCloudBar(){
@@ -259,21 +257,25 @@ function openCloudSettings(){
     <div class="sqlhint wide"><b>Optional cloud storage.</b> The Register Document form always works locally. Configure one or both cloud targets for shared storage. For Supabase, use only the public <b>anon</b> key with Row Level Security enabled. Never paste a service-role key into this HTML.</div>
     <label class="wide">Supabase Project URL<input id="c_supabaseUrl" placeholder="https://your-project.supabase.co" value="${esc(c.supabaseUrl||'')}"></label>
     <label class="wide">Supabase Anon/Public Key<input id="c_supabaseKey" type="password" placeholder="public anon key" value="${esc(c.supabaseAnonKey||'')}"></label>
-    <label class="wide">Google Apps Script Web App URL<input id="c_appsScript" placeholder="https://script.google.com/macros/s/AKfycbwalLofZ5exXgf8M-aFC-qiE4ubUa53TPDZLa9DZJPLl4c0aqxrG-SgxsEJBbiT5yUC/exec" value="${esc(c.appsScriptUrl||'')}"></label>
+    <label class="wide">Google Apps Script Web App URL<input id="c_appsScript" placeholder="https://script.google.com/macros/s/AKfycbx1C2RdJBGEDa4mpW4J1KFMTw3JfmRLtIrnQB-n47R80F2xWYT-H_O_oTcHWNmnxEArpg/exec" value="${esc(c.appsScriptUrl||'')}"></label>
     <div class="actions wide"><button type="button" class="secondary" onclick="closeModal('docModal')">Cancel</button><button class="primary">Save Connection</button></div>
   </form>`;
   document.getElementById('docModal').style.display='grid';
 }
 function saveCloudSettings(e){
   e.preventDefault();
-  saveCloudCfg({supabaseUrl:document.getElementById('c_supabaseUrl').value.trim(),supabaseAnonKey:document.getElementById('c_supabaseKey').value.trim(),appsScriptUrl:document.getElementById('c_appsScript').value.trim()});
+  const appsScriptUrl=document.getElementById('c_appsScript').value.trim(); saveCloudCfg({supabaseUrl:document.getElementById('c_supabaseUrl').value.trim(),supabaseAnonKey:document.getElementById('c_supabaseKey').value.trim(),appsScriptUrl});
   closeModal('docModal');renderRegistry();renderCloudBar();flash('Cloud connection settings saved.');
 }
 async function syncAllToCloud(){
-  if(!cloudConfigured()){flash('Configure a cloud connection first.');return;}
-  let docs=db.documents||[], failed=0;
-  for(let d of docs){let r=await syncOneDocument(d, false); if(r.some(x=>x.includes('failed')))failed++;}
-  save();renderRegistry();flash(failed?'Sync completed with '+failed+' error(s). Check the browser console.':'All local records sent to configured cloud services.');
+  if(!v6url()){flash('Connect Google Sheets first.');return;}
+  const docs=db.documents||[]; let failed=0, done=0;
+  for(const d of docs){
+    try{ await pushDocumentToSheets(d,false); done++; }
+    catch(e){ failed++; console.warn('Google Sheets sync failed for '+(d.control||d.id),e); }
+  }
+  save(); renderRegistry(); renderCloudBar();
+  flash(failed ? 'Cloud sync needs attention: '+failed+' record(s) failed; '+done+' synced successfully.' : 'Cloud sync complete: '+done+' record(s) verified in Google Sheets.');
 }
 function nextControl(){
   let y=new Date().getFullYear(),docs=Array.isArray(db?.documents)?db.documents:[],n=docs.filter(d=>String(d.control||'').startsWith('KNHS-'+y+'-')).length+1;
@@ -384,7 +386,7 @@ function renderRegistry(){
 const V6_SHEETS_KEY='KNHS_DocumentTrack_V6_SHEETS';
 function v6cfg(){try{return JSON.parse(localStorage.getItem(V6_SHEETS_KEY)||'{}')}catch(e){return {}}}
 function v6savecfg(c){localStorage.setItem(V6_SHEETS_KEY,JSON.stringify(c||{}))}
-function v6url(){return String(v6cfg().appsScriptUrl||'').trim()}
+function v6url(){const a=String(v6cfg().appsScriptUrl||'').trim(); if(a)return a; try{return String((cloudCfg()||{}).appsScriptUrl||'').trim()}catch(e){return ''}}
 function v6sheetConfigured(){return !!v6url()}
 function v6api(payload){
   const url=v6url();
@@ -402,7 +404,7 @@ function v6jsonp(url,payload){
     const script=document.createElement('script');
     let done=false;
     const finish=(fn,val)=>{if(done)return;done=true;clearTimeout(timer);try{delete window[cb]}catch(_){window[cb]=undefined}script.remove();fn(val)};
-    const timer=setTimeout(()=>finish(reject,new Error('Google Apps Script did not respond. Open the Web App /exec URL directly in a new browser tab. If it shows an authorization/login page, redeploy the Web App with Execute as: Me and access allowed to the users of this app.'))),25000);
+    const timer=setTimeout(()=>finish(reject,new Error('Google Apps Script did not respond. Open the Web App /exec URL directly in a new browser tab. If it shows an authorization/login page, redeploy the Web App with Execute as: Me and access allowed to the users of this app.')),25000);
     window[cb]=(d)=>{if(!d||d.ok===false)finish(reject,new Error((d&&d.message)||'Google Sheets request failed.'));else finish(resolve,d)};
     script.onerror=()=>finish(reject,new Error('Google Apps Script Web App could not be loaded. Check that the saved URL is the deployed /exec URL (not /dev), the deployment is active, and access is allowed.'));
     script.src=url+(url.includes('?')?'&':'?')+'action='+encodeURIComponent(payload.action||'')+'&payload='+encodeURIComponent(JSON.stringify(payload))+'&callback='+encodeURIComponent(cb)+'&_='+Date.now();
@@ -423,7 +425,7 @@ function v6postAndVerify(url,payload){
     let settled=false;
     const cleanup=()=>{try{form.remove();iframe.remove()}catch(_){} };
     const fail=(msg)=>{if(settled)return;settled=true;cleanup();reject(new Error(msg));};
-    const timer=setTimeout(()=>fail('Google Apps Script write could not be verified. Check the /exec Web App deployment and Google Sheet permissions.')),30000);
+    const timer=setTimeout(()=>fail('Google Apps Script write could not be verified. Check the /exec Web App deployment and Google Sheet permissions.'),30000);
     iframe.onload=async()=>{
       // The iframe response is intentionally not read (cross-origin). Instead,
       // verify the write through the JSONP read endpoint.
@@ -462,7 +464,7 @@ function show(id,btn){
 }
 function renderCloudBar(){const el=document.getElementById('registry'); if(!el)return; const old=el.querySelector('.v6cloudbar'); if(old)old.remove(); const div=document.createElement('div');div.className='v6cloudbar';div.style='display:flex;gap:8px;align-items:center;justify-content:space-between;margin-bottom:10px;padding:10px 12px;border:1px solid #dbe2ea;border-radius:10px;background:#fff';div.innerHTML=`<span>☁ <b>Google Sheets:</b> ${v6sheetConfigured()?'Connected — shared database':'Not configured'}</span><span><button class="secondary" type="button" onclick="loadSharedDocumentsV6()">↻ Refresh Shared Data</button><button class="secondary" type="button" onclick="openSheetsSettingsV6()">⚙ Connection</button></span>`;el.prepend(div)}
 function openSheetsSettingsV6(){const c=v6cfg(); document.getElementById('docForm').innerHTML=`<form class="form" onsubmit="saveSheetsSettingsV6(event)"><h2>Google Sheets Database</h2><p class="muted">Google Sheets is the primary database for this version. All computers using this Web App can read the same records.</p><label class="wide">Google Apps Script Web App URL<input id="v6_appsScript" required placeholder="https://script.google.com/macros/s/.../exec" value="${esc(c.appsScriptUrl||'')}"></label><div class="actions wide"><button type="button" class="secondary" onclick="closeModal('docModal')">Cancel</button><button class="primary">Save & Test Connection</button></div></form>`;document.getElementById('docModal').style.display='grid'}
-async function saveSheetsSettingsV6(e){e.preventDefault();const url=document.getElementById('v6_appsScript').value.trim();v6savecfg({appsScriptUrl:url});try{await loadSharedDocumentsV6(true);closeModal('docModal');flash('Google Sheets connection saved and tested.')}catch(err){flash(err.message)}}
+async function saveSheetsSettingsV6(e){e.preventDefault();const url=document.getElementById('v6_appsScript').value.trim();v6savecfg({appsScriptUrl:url}); const old=cloudCfg(); saveCloudCfg({...old,appsScriptUrl:url}); try{await loadSharedDocumentsV6(true);closeModal('docModal');flash('Google Sheets connection saved and tested.')}catch(err){flash('Connection test failed: '+err.message)}}
 async function saveDoc(e,id){e.preventDefault(); if(publicMode&&!adminMode){flash('Public users can view records but cannot register or edit documents.');return;}
   let existing=id?db.documents.find(x=>Number(x.id)===Number(id)):null; let control=document.getElementById('f_control').value.trim(), subject=document.getElementById('f_subject').value.trim();
   if(!control||!subject){flash('Control No. and Subject are required.');return}
