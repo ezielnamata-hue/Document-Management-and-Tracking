@@ -45,6 +45,13 @@ body.admin-mode .public-banner{display:none}
 /* SQL-aligned workspace enhancements */
 .datahub{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:16px}.hub{border:1px solid #dfe5ed;background:#fff;border-radius:12px;padding:16px;cursor:pointer;transition:.15s}.hub:hover{transform:translateY(-1px);box-shadow:0 7px 22px #00000012}.hub .hubicon{font-size:24px}.hub b{display:block;font-size:14px;margin-top:7px}.hub span{display:block;font-size:11px;color:#697586;margin-top:4px}.hub.primaryhub{border-color:#7a263a;background:#7a263a;color:#fff}.hub.primaryhub span{color:#f4dce2}.toolbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.toolbar .secondary,.toolbar .primary{white-space:nowrap}.reportcards{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px}.reportcard{background:#f8fafc;border:1px solid #e1e6ee;border-radius:10px;padding:12px}.reportcard small{display:block;color:#697586;font-size:10px}.reportcard b{font-size:23px;display:block;margin-top:4px}.subnav{display:flex;gap:7px;flex-wrap:wrap;margin-bottom:14px}.subnav button{border:1px solid #d4dae4;background:#fff;border-radius:8px;padding:8px 11px;font-weight:700;font-size:11px}.subnav button.active{background:#7a263a;color:#fff;border-color:#7a263a}.sqlhint{padding:10px 12px;border-radius:8px;background:#eef5ff;border:1px solid #d7e5ff;color:#2455a4;font-size:11px;margin-bottom:12px}.backupgrid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.backupaction{padding:16px;border:1px solid #e1e6ee;border-radius:10px;background:#fff}.backupaction h3{margin:0 0 6px;font-size:14px}.backupaction p{font-size:11px;color:#697586;line-height:1.5}.dangerbox{background:#fff7f6;border-color:#f4c7c3}.fieldchips{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}.chip{background:#edf2f7;border-radius:99px;padding:4px 7px;font-size:9px;color:#536173}.nowrap{white-space:nowrap}@media(max-width:950px){.datahub,.reportcards{grid-template-columns:1fr 1fr}.backupgrid{grid-template-columns:1fr}}@media(max-width:650px){.datahub,.reportcards{grid-template-columns:1fr}.hub{padding:13px}}
 </style>
+
+<style id="v6-public-readonly">
+body.public-readonly .v6-admin-only{display:none!important}
+</style>
+<script>
+document.addEventListener('DOMContentLoaded',()=>{if(window.publicMode)document.body.classList.add('public-readonly')});
+</script>
 </head>
 <body>
 <div id="login" class="login"><div class="loginbox">
@@ -252,7 +259,7 @@ function openCloudSettings(){
     <div class="sqlhint wide"><b>Optional cloud storage.</b> The Register Document form always works locally. Configure one or both cloud targets for shared storage. For Supabase, use only the public <b>anon</b> key with Row Level Security enabled. Never paste a service-role key into this HTML.</div>
     <label class="wide">Supabase Project URL<input id="c_supabaseUrl" placeholder="https://your-project.supabase.co" value="${esc(c.supabaseUrl||'')}"></label>
     <label class="wide">Supabase Anon/Public Key<input id="c_supabaseKey" type="password" placeholder="public anon key" value="${esc(c.supabaseAnonKey||'')}"></label>
-    <label class="wide">Google Apps Script Web App URL<input id="c_appsScript" placeholder="https://script.google.com/a/macros/deped.gov.ph/s/AKfycbyMuyzYwL1DORkOA0Bd6IUn8KvNf-7aGN2gAytompRnHovR5BoW7R0wZbOhB6-SK28cPQ/exec" value="${esc(c.appsScriptUrl||'')}"></label>
+    <label class="wide">Google Apps Script Web App URL<input id="c_appsScript" placeholder="https://script.google.com/a/macros/deped.gov.ph/s/AKfycby_d5VeF_tngvRVwVI_p98XVpxKcEEd8VAWO4gurd8i7jvYETBGV3D4L3RXX95XRpIZQQ/exec" value="${esc(c.appsScriptUrl||'')}"></label>
     <div class="actions wide"><button type="button" class="secondary" onclick="closeModal('docModal')">Cancel</button><button class="primary">Save Connection</button></div>
   </form>`;
   document.getElementById('docModal').style.display='grid';
@@ -379,12 +386,19 @@ function v6cfg(){try{return JSON.parse(localStorage.getItem(V6_SHEETS_KEY)||'{}'
 function v6savecfg(c){localStorage.setItem(V6_SHEETS_KEY,JSON.stringify(c||{}))}
 function v6url(){return String(v6cfg().appsScriptUrl||'').trim()}
 function v6sheetConfigured(){return !!v6url()}
-async function v6api(payload){
-  const url=v6url(); if(!url) throw new Error('Google Apps Script Web App URL is not configured.');
-  const r=await fetch(url,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(payload)});
-  const t=await r.text(); let d; try{d=JSON.parse(t)}catch(e){throw new Error('Invalid response from Google Apps Script. '+t.slice(0,180))}
-  if(!r.ok||d.ok===false) throw new Error(d.message||('Google Sheets request failed ('+r.status+').'));
-  return d;
+function v6api(payload){
+  const url=v6url();
+  if(!url) return Promise.reject(new Error('Google Apps Script Web App URL is not configured.'));
+  return new Promise((resolve,reject)=>{
+    const cb='__knhsV6_'+Date.now()+'_'+Math.random().toString(36).slice(2);
+    const script=document.createElement('script');
+    const timer=setTimeout(()=>{cleanup();reject(new Error('Google Apps Script did not respond. Check that the Web App is deployed as EXECUTE AS ME and accessible to the intended users.'))},20000);
+    function cleanup(){clearTimeout(timer);try{delete window[cb]}catch(_){window[cb]=undefined}script.remove()}
+    window[cb]=(d)=>{cleanup();if(!d||d.ok===false)reject(new Error((d&&d.message)||'Google Sheets request failed.'));else resolve(d)};
+    script.onerror=()=>{cleanup();reject(new Error('Failed to contact Google Apps Script. This version uses JSONP to avoid browser CORS/fetch errors.'))};
+    script.src=url+(url.includes('?')?'&':'?')+'action='+encodeURIComponent(payload.action||'')+'&payload='+encodeURIComponent(JSON.stringify(payload))+'&callback='+encodeURIComponent(cb)+'&_='+Date.now();
+    document.body.appendChild(script);
+  });
 }
 function v6fromSheet(x){return {id:Number(x.id)||uid(),control:x.control_no||'',reference:x.reference_no||'',subject:x.subject||'',type:x.document_type||'',sender:x.sender||'',origin:x.originating_office||'',received:x.date_received||'',due:x.due_date||'',priority:x.priority||'Normal',status:x.status||'Received',office:x.current_office||'',custodian:x.current_custodian||'',remarks:x.remarks||'',created:x.created_at||new Date().toISOString(),updated:x.updated_at||new Date().toISOString(),movements:[],attachments:[]}}
 function v6mergeMovements(docs,moves){const map={}; docs.forEach(d=>map[d.id]=d); (moves||[]).forEach(m=>{const d=map[Number(m.document_id)]; if(d){(d.movements||(d.movements=[])).push({id:Number(m.id)||uid(),at:m.created_at||'',from:m.route_from||'',to:m.route_to||'',receivedBy:m.received_by||'',action:m.action||'',status:m.status||'',remarks:m.remarks||'',by:m.by||''})}}); return docs}
