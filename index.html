@@ -252,7 +252,7 @@ function openCloudSettings(){
     <div class="sqlhint wide"><b>Optional cloud storage.</b> The Register Document form always works locally. Configure one or both cloud targets for shared storage. For Supabase, use only the public <b>anon</b> key with Row Level Security enabled. Never paste a service-role key into this HTML.</div>
     <label class="wide">Supabase Project URL<input id="c_supabaseUrl" placeholder="https://your-project.supabase.co" value="${esc(c.supabaseUrl||'')}"></label>
     <label class="wide">Supabase Anon/Public Key<input id="c_supabaseKey" type="password" placeholder="public anon key" value="${esc(c.supabaseAnonKey||'')}"></label>
-    <label class="wide">Google Apps Script Web App URL<input id="c_appsScript" placeholder="https://script.google.com/a/macros/deped.gov.ph/s/AKfycbyYWCkfIZvWBe72aZGK5qEpjuiEMDclyxqTY6CiGtGyzkoId90Q9eOKiQFNHTJWe_JVrA/exec" value="${esc(c.appsScriptUrl||'')}"></label>
+    <label class="wide">Google Apps Script Web App URL<input id="c_appsScript" placeholder="https://script.google.com/macros/s/.../exec" value="${esc(c.appsScriptUrl||'')}"></label>
     <div class="actions wide"><button type="button" class="secondary" onclick="closeModal('docModal')">Cancel</button><button class="primary">Save Connection</button></div>
   </form>`;
   document.getElementById('docModal').style.display='grid';
@@ -274,7 +274,6 @@ function nextControl(){
   return `KNHS-${y}-${String(n).padStart(4,'0')}`;
 }
 function openDoc(id=null){
-  if(publicMode&&!adminMode){flash('Public dashboard is view-only. Please use Admin Login.');return;}
   let d=id?db.documents.find(x=>x.id===id):null;
   document.getElementById('docModalTitle').textContent=d?'Edit Document':'Register Document';
   document.getElementById('docForm').innerHTML=`<form class="form grid" onsubmit="saveDoc(event,${id||0})">
@@ -292,13 +291,16 @@ function openDoc(id=null){
     <label>Current Office<input id="f_office" value="${esc(d?.office||'')}"></label>
     <label>Current Custodian<input id="f_custodian" value="${esc(d?.custodian||'')}"></label>
     <label class="wide">Remarks<textarea id="f_remarks">${esc(d?.remarks||'')}</textarea></label>
-    <div class="actions wide"><button type="button" class="secondary" onclick="closeModal('docModal')">Cancel</button><button id="saveDocBtn" class="primary">Save Document</button></div>
+    <div class="actions wide"><button type="button" class="secondary" onclick="closeModal('docModal')">Cancel</button><button id="saveDocBtn" type="submit" class="primary" onclick="saveDocFromButton(event,${id||0})">💾 Save Document</button></div>
   </form>`;
   document.getElementById('docModal').style.display='grid';
   setTimeout(()=>document.getElementById('f_subject')?.focus(),50);
 }
+function saveDocFromButton(e,id){
+  e.preventDefault();
+  saveDoc(e,id);
+}
 async function saveDoc(e,id){
-  if(publicMode&&!adminMode){flash('Public dashboard is view-only.');return;}
   e.preventDefault();
   let d=id?db.documents.find(x=>x.id===id):null;
   let control=document.getElementById('f_control').value.trim(), subject=document.getElementById('f_subject').value.trim();
@@ -322,6 +324,7 @@ async function saveDoc(e,id){
     let failed=results.filter(x=>x.includes('failed'));
     flash(failed.length?'Document saved locally; cloud sync needs attention.':'Document saved and synced to '+results.filter(x=>!x.includes('failed')).join(' + ')+'.');
   }else flash(isNew?'Document registered successfully.':'Document updated successfully.');
+  if(btn){btn.disabled=false;btn.textContent='💾 Save Document';}
 }
 function renderRegistry(){
   let docs=(db.documents||[]).slice().sort((a,b)=>(b.id||0)-(a.id||0)),statuses=['Received','In Process','Released','Approved','Closed'],types=[...new Set(docs.map(d=>d.type).filter(Boolean))];
