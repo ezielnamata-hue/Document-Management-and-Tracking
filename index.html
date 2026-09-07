@@ -252,7 +252,7 @@ function openCloudSettings(){
     <div class="sqlhint wide"><b>Optional cloud storage.</b> The Register Document form always works locally. Configure one or both cloud targets for shared storage. For Supabase, use only the public <b>anon</b> key with Row Level Security enabled. Never paste a service-role key into this HTML.</div>
     <label class="wide">Supabase Project URL<input id="c_supabaseUrl" placeholder="https://your-project.supabase.co" value="${esc(c.supabaseUrl||'')}"></label>
     <label class="wide">Supabase Anon/Public Key<input id="c_supabaseKey" type="password" placeholder="public anon key" value="${esc(c.supabaseAnonKey||'')}"></label>
-    <label class="wide">Google Apps Script Web App URL<input id="c_appsScript" placeholder="https://script.google.com/macros/s/.../exec" value="${esc(c.appsScriptUrl||'')}"></label>
+    <label class="wide">Google Apps Script Web App URL<input id="c_appsScript" placeholder="https://script.google.com/a/macros/deped.gov.ph/s/AKfycbyYWCkfIZvWBe72aZGK5qEpjuiEMDclyxqTY6CiGtGyzkoId90Q9eOKiQFNHTJWe_JVrA/exec" value="${esc(c.appsScriptUrl||'')}"></label>
     <div class="actions wide"><button type="button" class="secondary" onclick="closeModal('docModal')">Cancel</button><button class="primary">Save Connection</button></div>
   </form>`;
   document.getElementById('docModal').style.display='grid';
