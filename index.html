@@ -252,7 +252,7 @@ function openCloudSettings(){
     <div class="sqlhint wide"><b>Optional cloud storage.</b> The Register Document form always works locally. Configure one or both cloud targets for shared storage. For Supabase, use only the public <b>anon</b> key with Row Level Security enabled. Never paste a service-role key into this HTML.</div>
     <label class="wide">Supabase Project URL<input id="c_supabaseUrl" placeholder="https://your-project.supabase.co" value="${esc(c.supabaseUrl||'')}"></label>
     <label class="wide">Supabase Anon/Public Key<input id="c_supabaseKey" type="password" placeholder="public anon key" value="${esc(c.supabaseAnonKey||'')}"></label>
-    <label class="wide">Google Apps Script Web App URL<input id="c_appsScript" placeholder="https://script.google.com/a/macros/deped.gov.ph/s/AKfycbyYWCkfIZvWBe72aZGK5qEpjuiEMDclyxqTY6CiGtGyzkoId90Q9eOKiQFNHTJWe_JVrA/exec" value="${esc(c.appsScriptUrl||'')}"></label>
+    <label class="wide">Google Apps Script Web App URL<input id="c_appsScript" placeholder="https://script.google.com/a/macros/deped.gov.ph/s/AKfycbyMuyzYwL1DORkOA0Bd6IUn8KvNf-7aGN2gAytompRnHovR5BoW7R0wZbOhB6-SK28cPQ/exec" value="${esc(c.appsScriptUrl||'')}"></label>
     <div class="actions wide"><button type="button" class="secondary" onclick="closeModal('docModal')">Cancel</button><button class="primary">Save Connection</button></div>
   </form>`;
   document.getElementById('docModal').style.display='grid';
@@ -371,5 +371,52 @@ function renderRegistry(){
   <div class="panel"><div class="panelhead"><h2>Document Registry <span class="muted small">${docs.length} record(s)</span></h2><span class="muted small">Register, view, edit, route, export, and synchronize documents</span></div><div class="tablewrap"><table id="docTable"><thead><tr><th>Control No.</th><th>Subject / Type</th><th>Sender</th><th>Originating Office</th><th>Date Received</th><th>Due Date</th><th>Current Office</th><th>Custodian</th><th>Status</th><th>Priority</th><th>Actions</th></tr></thead><tbody>${docs.map(d=>docRow(d)).join('')||'<tr><td colspan="11" class="empty">No records. Click “Register Document” to add the first document.</td></tr>'}</tbody></table></div></div>`;
   renderCloudBar();
 }
+</script>
+<script>
+/* KNHS DocumentTrack V6 — Google Sheets is the PRIMARY database. */
+const V6_SHEETS_KEY='KNHS_DocumentTrack_V6_SHEETS';
+function v6cfg(){try{return JSON.parse(localStorage.getItem(V6_SHEETS_KEY)||'{}')}catch(e){return {}}}
+function v6savecfg(c){localStorage.setItem(V6_SHEETS_KEY,JSON.stringify(c||{}))}
+function v6url(){return String(v6cfg().appsScriptUrl||'').trim()}
+function v6sheetConfigured(){return !!v6url()}
+async function v6api(payload){
+  const url=v6url(); if(!url) throw new Error('Google Apps Script Web App URL is not configured.');
+  const r=await fetch(url,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(payload)});
+  const t=await r.text(); let d; try{d=JSON.parse(t)}catch(e){throw new Error('Invalid response from Google Apps Script. '+t.slice(0,180))}
+  if(!r.ok||d.ok===false) throw new Error(d.message||('Google Sheets request failed ('+r.status+').'));
+  return d;
+}
+function v6fromSheet(x){return {id:Number(x.id)||uid(),control:x.control_no||'',reference:x.reference_no||'',subject:x.subject||'',type:x.document_type||'',sender:x.sender||'',origin:x.originating_office||'',received:x.date_received||'',due:x.due_date||'',priority:x.priority||'Normal',status:x.status||'Received',office:x.current_office||'',custodian:x.current_custodian||'',remarks:x.remarks||'',created:x.created_at||new Date().toISOString(),updated:x.updated_at||new Date().toISOString(),movements:[],attachments:[]}}
+function v6mergeMovements(docs,moves){const map={}; docs.forEach(d=>map[d.id]=d); (moves||[]).forEach(m=>{const d=map[Number(m.document_id)]; if(d){(d.movements||(d.movements=[])).push({id:Number(m.id)||uid(),at:m.created_at||'',from:m.route_from||'',to:m.route_to||'',receivedBy:m.received_by||'',action:m.action||'',status:m.status||'',remarks:m.remarks||'',by:m.by||''})}}); return docs}
+async function loadSharedDocumentsV6(silent=false){
+  if(!v6sheetConfigured()) return false;
+  try{const d=await v6api({action:'getDocumentDatabase'}); const docs=(d.documents||[]).map(v6fromSheet); db.documents=v6mergeMovements(docs,d.document_movements||d.movements||[]); save(); if(typeof render==='function'){render('dashboard');render('registry');renderCloudBar&&renderCloudBar()} if(!silent) flash('Shared Google Sheets data loaded.'); return true}
+  catch(e){console.warn(e); if(!silent) flash('Could not load Google Sheets data: '+e.message); return false}
+}
+async function saveDocumentToSheetsV6(d,isNew){
+  const payload={action:isNew?'createDocument':'updateDocument',document:sqlDocument(d),actor:(currentUser&&currentUser.username)||'public'};
+  const r=await v6api(payload); if(r.document_id)d.id=Number(r.document_id); return r;
+}
+async function saveMovementToSheetsV6(m){return await v6api({action:'createMovement',movement:{...sqlMovement(db.documents.find(d=>Number(d.id)===Number(m.document_id))||{},m),document_id:Number(m.document_id)}})}
+function show(id,btn){
+  if(publicMode&&!adminMode&&['users','settings','backup'].includes(id)){show('dashboard',document.querySelector('.nav'));flash('This section is restricted to administrators.');return;}
+  document.querySelectorAll('.page').forEach(x=>x.classList.add('hidden')); const sec=document.getElementById(id); if(sec)sec.classList.remove('hidden'); document.querySelectorAll('.nav').forEach(x=>x.classList.remove('active')); if(btn)btn.classList.add('active'); let titles={dashboard:'Dashboard',registry:'Document Registry',reports:'Reports',users:'User Management',settings:'School Settings',backup:'Backup / Restore'}; document.getElementById('pageTitle').textContent=titles[id]||'Dashboard'; render(id); if(v6sheetConfigured()&&['dashboard','registry','reports'].includes(id))loadSharedDocumentsV6(true);
+}
+function renderCloudBar(){const el=document.getElementById('registry'); if(!el)return; const old=el.querySelector('.v6cloudbar'); if(old)old.remove(); const div=document.createElement('div');div.className='v6cloudbar';div.style='display:flex;gap:8px;align-items:center;justify-content:space-between;margin-bottom:10px;padding:10px 12px;border:1px solid #dbe2ea;border-radius:10px;background:#fff';div.innerHTML=`<span>☁ <b>Google Sheets:</b> ${v6sheetConfigured()?'Connected — shared database':'Not configured'}</span><span><button class="secondary" type="button" onclick="loadSharedDocumentsV6()">↻ Refresh Shared Data</button><button class="secondary" type="button" onclick="openSheetsSettingsV6()">⚙ Connection</button></span>`;el.prepend(div)}
+function openSheetsSettingsV6(){const c=v6cfg(); document.getElementById('docForm').innerHTML=`<form class="form" onsubmit="saveSheetsSettingsV6(event)"><h2>Google Sheets Database</h2><p class="muted">Google Sheets is the primary database for this version. All computers using this Web App can read the same records.</p><label class="wide">Google Apps Script Web App URL<input id="v6_appsScript" required placeholder="https://script.google.com/macros/s/.../exec" value="${esc(c.appsScriptUrl||'')}"></label><div class="actions wide"><button type="button" class="secondary" onclick="closeModal('docModal')">Cancel</button><button class="primary">Save & Test Connection</button></div></form>`;document.getElementById('docModal').style.display='grid'}
+async function saveSheetsSettingsV6(e){e.preventDefault();const url=document.getElementById('v6_appsScript').value.trim();v6savecfg({appsScriptUrl:url});try{await loadSharedDocumentsV6(true);closeModal('docModal');flash('Google Sheets connection saved and tested.')}catch(err){flash(err.message)}}
+async function saveDoc(e,id){e.preventDefault(); if(publicMode&&!adminMode){flash('Public users can view records but cannot register or edit documents.');return;}
+  let existing=id?db.documents.find(x=>Number(x.id)===Number(id)):null; let control=document.getElementById('f_control').value.trim(), subject=document.getElementById('f_subject').value.trim();
+  if(!control||!subject){flash('Control No. and Subject are required.');return}
+  if((db.documents||[]).some(x=>String(x.control).trim().toLowerCase()===control.toLowerCase()&&(!id||Number(x.id)!==Number(id)))){flash('Control No. already exists.');return}
+  let received=document.getElementById('f_received').value,due=document.getElementById('f_due').value;if(due&&received&&due<received){flash('Due Date cannot be earlier than Date Received.');return}
+  const now=new Date().toISOString(); const obj={id:existing?existing.id:uid(),control,reference:document.getElementById('f_reference').value.trim(),subject,type:document.getElementById('f_type').value,sender:document.getElementById('f_sender').value.trim(),origin:document.getElementById('f_origin').value.trim(),received,due,priority:document.getElementById('f_priority').value,status:document.getElementById('f_status').value,office:document.getElementById('f_office').value.trim(),custodian:document.getElementById('f_custodian').value.trim(),remarks:document.getElementById('f_remarks').value.trim(),created:existing?.created||now,updated:now,movements:existing?.movements||[],attachments:existing?.attachments||[]};
+  if(!v6sheetConfigured()){flash('Connect Google Sheets first in Settings/Connection.');return}
+  const btn=document.querySelector('#docForm button.primary'); if(btn){btn.disabled=true;btn.textContent='Saving to Google Sheets…'}
+  try{const r=await saveDocumentToSheetsV6(obj,!existing); if(!existing&&r.document_id)obj.id=Number(r.document_id); const idx=(db.documents||[]).findIndex(x=>Number(x.id)===Number(obj.id)); if(idx>=0)db.documents[idx]=obj;else db.documents.unshift(obj); save(); closeModal('docModal'); render('registry'); renderDashboard(); flash('Document saved to Google Sheets. Other computers can now see it.');}
+  catch(err){console.error(err);flash('Save failed: '+err.message)} finally{if(btn){btn.disabled=false;btn.textContent='💾 Save Document'}}
+}
+async function addMovement(id){if(publicMode&&!adminMode){flash('Public users cannot add movements.');return} if(!v6sheetConfigured()){flash('Connect Google Sheets first.');return} return window.__origAddMovementV6?window.__origAddMovementV6(id):flash('Use the document route action after connecting Google Sheets.')}
+window.addEventListener('load',()=>setTimeout(()=>{if(v6sheetConfigured())loadSharedDocumentsV6(true)},400));
 </script>
 </body></html>
